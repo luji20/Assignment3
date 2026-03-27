@@ -35,7 +35,7 @@ int sc_main(int argc, char *argv[])
     hw.connect_bus_ack(&bus.ack_ev_sw,&bus.ack_ev_hw);
     hw.connect_bus_ack_done(&bus.ack_done_ev);
     hw.connect_bus_read_done(&bus.read_done_ev);
-    hw.connect_bus_read(&bus.read_data_ev_sw,&bus.read_data_sw);
+    hw.connect_bus_read(&bus.read_data_ev_hw,&bus.read_data_hw);
     std::cout << "[sim] Starting simulation...\n";
     sc_start();
 

@@ -54,9 +54,7 @@ void sw_component::bus_write_word(unsigned int addr, unsigned int data)
 
 void sw_component::hw_trigger_and_wait(unsigned int n, unsigned int i, unsigned int j)
 {
-    bus_write_word(MMIO_HW_CTRL, HW_CTRL_RESET);
-    bus_write_word(MMIO_HW_CTRL, 0);
-
+    // No RESET needed - HW clears status itself at start of each computation
     bus_write_word(MMIO_HW_ADDR_A, elem_addr(m_addr_a, n, i, 0));
     bus_write_word(MMIO_HW_ADDR_B, elem_addr(m_addr_b, n, 0, j));
     bus_write_word(MMIO_HW_ADDR_C, elem_addr(m_addr_c, n, i, j));
@@ -66,12 +64,16 @@ void sw_component::hw_trigger_and_wait(unsigned int n, unsigned int i, unsigned 
 
     bus_write_word(MMIO_HW_CTRL, HW_CTRL_START);
 
+    // Wait long enough for HW to finish the k-loop before polling.
+    // Each k iteration: 2 reads (request+ack+data each) + 1 write = ~10 bus cycles.
+    // size * 10 cycles * CLOCK_PERIOD_NS gives a safe lower bound.
+    wait(sc_time(m_size * 10 * BUS_REQUEST_CYCLES * CLOCK_PERIOD_NS * 10, SC_NS));
+
+    // Now poll for DONE
     unsigned int status = 0;
     do {
         status = bus_read_word(MMIO_HW_STATUS);
     } while (!(status & HW_STATUS_DONE));
-
-    bus_write_word(MMIO_HW_CTRL, 0);
 }
 
 void sw_component::sw_thread()

@@ -43,11 +43,11 @@ bool Bus::WaitForAcknowledge(unsigned int mst_id)
 void Bus::ReadData(unsigned int &data)
 {
     if (last_ack_master==MASTER_ID_SW){
-        wait(read_data_ev_hw);
-        data=read_data_hw;
-    } else  {
         wait(read_data_ev_sw);
         data=read_data_sw;
+    } else  {
+        wait(read_data_ev_hw);
+        data=read_data_hw;
     }
     
     BUS_PRINT("ReadData phase");

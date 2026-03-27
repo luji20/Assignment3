@@ -71,15 +71,22 @@ void hw_component::hw_thread()
     {
         wait(start_event);
 
+        // Clear done flag at start of each computation
+        status &= ~HW_STATUS_DONE;
+        status |= HW_STATUS_BUSY;
+
         std::cout << "[HW] Starting k-loop offload for i=" << i << " j=" << j << std::endl;
 
         int acc = 0;
         for (unsigned int k = 0; k < size; ++k)
         {
-            unsigned int a_val = bus_read_word(addr_a + k * WORD_SIZE_BYTES);
-            std::cout<<"[HW] k= "<<k<< "a_val"<<a_val<<"now reading b \n";
-            unsigned int b_val = bus_read_word(addr_b + k * size * WORD_SIZE_BYTES);
-            std::cout<<"[HW] k= "<<k<< "b_val"<<b_val<<"\n";
+            unsigned int a_addr = addr_a + k * WORD_SIZE_BYTES;
+            unsigned int b_addr = addr_b + k * size * WORD_SIZE_BYTES;
+            std::cout << "[HW DEBUG] k=" << k << " reading A from 0x" << std::hex << a_addr
+                      << " reading B from 0x" << b_addr << std::dec << "\n";
+            unsigned int a_val = bus_read_word(a_addr);
+            unsigned int b_val = bus_read_word(b_addr);
+            std::cout << "[HW DEBUG] k=" << k << " a_val=" << a_val << " b_val=" << b_val << "\n";
             acc += (int)a_val * (int)b_val;
         }
 
