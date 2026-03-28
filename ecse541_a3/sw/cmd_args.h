@@ -26,7 +26,7 @@ struct ProgramArgs {
     unsigned int addr_b   = DEFAULT_ADDR_B;
     unsigned int size     = DEFAULT_SIZE;
     unsigned int loops    = DEFAULT_LOOPS;
-    bool         hw_mode  = true;
+    bool         hw_mode  = false;
     // default: run HW/SW partition
 };
 

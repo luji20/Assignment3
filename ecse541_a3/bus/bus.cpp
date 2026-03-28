@@ -1,5 +1,4 @@
 #include "bus.h"
-#include "../mem/memory.h"
 
 Bus::Bus(sc_module_name name)
     : sc_module(name),
@@ -7,16 +6,15 @@ Bus::Bus(sc_module_name name)
       minion_export("minion_export")
 {
     master_export(*this);
+    minion_export(*this); // Bus implements the minion interface
 
     SC_THREAD(arbiter_thread);
-    SC_THREAD(data_thread);
 
     for (int i = 0; i < 2; ++i) pending[i].active = false;
 }
 
-void Bus::Request(unsigned int mst_id, unsigned int addr,
-                  unsigned int op, unsigned int len)
-{
+void Bus::Request(unsigned int mst_id, unsigned int addr, unsigned int op, unsigned int len) {
+    wait(BUS_REQUEST_CYCLES * sc_time(CLOCK_PERIOD_NS, SC_NS));
     if (mst_id >= 2) return;
     if (pending[mst_id].active) return;
 
@@ -25,124 +23,85 @@ void Bus::Request(unsigned int mst_id, unsigned int addr,
     request_ev.notify();
 }
 
-bool Bus::WaitForAcknowledge(unsigned int mst_id)
-{
+bool Bus::WaitForAcknowledge(unsigned int mst_id) {
     while (true) {
-        if(mst_id==MASTER_ID_SW){
-            wait(ack_ev_sw);
-        } else {
-            wait(ack_ev_hw);
+        wait(ack_ev);
+        // Only proceed if the Arbiter's current request belongs to this master
+        if (current_req.master_id == mst_id) {
+            BUS_PRINT("Master " << mst_id << " received ACK");
+            return true;
         }
-        //std:: cout<< "[BUS] ACK received, current_master id"<<current_req.master_id<<"waiting for "<<mst_id<<"\n";
-        last_ack_master=mst_id;
-        BUS_PRINT("Master " << mst_id << " received ACK");
-        return true;
     }
 }
 
-void Bus::ReadData(unsigned int &data)
-{
-    if (last_ack_master==MASTER_ID_SW){
-        wait(read_data_ev_sw);
-        data=read_data_sw;
-    } else  {
-        wait(read_data_ev_hw);
-        data=read_data_hw;
-    }
-    
+void Bus::ReadData(unsigned int &data) {
+    wait(read_data_ev);
+    data = shared_read_data;
     BUS_PRINT("ReadData phase");
 }
 
-void Bus::WriteData(unsigned int data)
-{
-    if (current_req.address < MMIO_END) {
-        wait(BUS_ACKNOWLEDGE_CYCLES*sc_time(CLOCK_PERIOD_NS,SC_NS));
-        hw_minion->mmio_incoming_write_data = data;
-        hw_minion->mmio_write_data_ready_ev.notify();
-    } else {
-        minion_mem->incoming_write_data = data;
-        write_data_ev.notify();
-    }
+void Bus::WriteData(unsigned int data) {
+    shared_write_data = data;
+    // Notify in the NEXT delta cycle to prevent 0-time race conditions
+    write_data_ev.notify(SC_ZERO_TIME); 
     BUS_PRINT("WriteData phase");
 }
 
-void Bus::Listen(unsigned int &req_addr, unsigned int &req_op, unsigned int &req_len)
-{
-    wait(request_ev);
+void Bus::Listen(unsigned int &req_addr, unsigned int &req_op, unsigned int &req_len) {
+    wait(minion_request_ev); // Block until Arbiter broadcasts a request
     req_addr = current_req.address;
     req_op   = current_req.operation;
     req_len  = current_req.length;
 }
 
-void Bus::Acknowledge()
-{
+void Bus::Acknowledge() {
     wait(BUS_ACKNOWLEDGE_CYCLES * sc_time(CLOCK_PERIOD_NS, SC_NS));
     ack_ev.notify();
-    ack_done_ev.notify(); 
     BUS_PRINT("Acknowledge sent");
 }
 
-void Bus::SendReadData(unsigned int data)
-{
+void Bus::SendReadData(unsigned int data) {
     wait(BUS_READ_CYCLES * sc_time(CLOCK_PERIOD_NS, SC_NS));
-    //if(current_req.master_id==MASTER_ID_SW){
-    read_data_sw=data;
-    read_data_hw=data;
-    read_data_ev_sw.notify();
-    //} else{
-    read_data_ev_hw.notify();
-    read_done_ev.notify();
-    //}
-
+    shared_read_data = data;
+    read_data_ev.notify();
+    transaction_done_ev.notify(); // Tell arbiter this word is finished
     BUS_PRINT("SendReadData done");
 }
 
-void Bus::ReceiveWriteData(unsigned int &data)
-{
-    wait(write_data_ev);
+void Bus::ReceiveWriteData(unsigned int &data) {
+    wait(write_data_ev); // Wait for master to put data on bus
     data = shared_write_data;
-    wait(BUS_WRITE_CYCLES * sc_time(1, SC_NS));
+    wait(BUS_WRITE_CYCLES * sc_time(CLOCK_PERIOD_NS, SC_NS));
+    transaction_done_ev.notify(); // Tell arbiter this word is finished
     BUS_PRINT("ReceiveWriteData done");
 }
 
-void Bus::arbiter_thread()
-{
+void Bus::arbiter_thread() {
     while (true) {
-
         bool any_pending=false;
-        for(int i=0;i<2;i++)
-            if(pending[i].active){
-                any_pending=true;
-                break;
+        for(int i=0;i<2;i++) {
+            if(pending[i].active) {
+                any_pending=true; break;
             }
-        if(!any_pending)
-            wait(request_ev);
+        }
+        if(!any_pending) wait(request_ev);
 
         int winner = select_next_master();
         if (winner < 0) continue;
 
         grant_to_master(winner);
-        wait(ack_done_ev);
-
-        if(current_req.operation==BUS_OP_WRITE){
-            if(current_req.address<MMIO_END)
-                wait(hw_minion->mmio_write_data_ready_ev);
-            else
-                wait(write_data_ev);
+        
+        // Wait for the minion to process all data words in the burst
+        for(unsigned int w = 0; w < current_req.length; ++w) {
+            wait(transaction_done_ev); 
         }
-        else
-            wait(read_done_ev);;
-
-        current_req.active = false;
         BUS_PRINT("Transaction finished for master " << winner);
 
         rr_next = (rr_next + 1) % 2;
-
     }
 }
 
-int Bus::select_next_master()
-{
+int Bus::select_next_master() {
     for (int i = 0; i < 2; ++i) {
         int cand = (rr_next + i) % 2;
         if (pending[cand].active) return cand;
@@ -150,19 +109,9 @@ int Bus::select_next_master()
     return -1;
 }
 
-void Bus::grant_to_master(int mid)
-{
+void Bus::grant_to_master(int mid) {
     current_req = pending[mid];
     pending[mid].active = false;
-    minion_mem->set_current_master(mid);
     BUS_PRINT("Granted to master " << mid);
-    if(current_req.address<MMIO_END)
-        hw_minion->notify_request(current_req.address,current_req.operation,current_req.length);
-    else
-        minion_mem->notify_request(current_req.address,current_req.operation,current_req.length);
-}
-
-void Bus::data_thread()
-{
-    while (true) wait(sc_time(1, SC_MS));
+    minion_request_ev.notify(); // Wakes up ALL minion threads
 }

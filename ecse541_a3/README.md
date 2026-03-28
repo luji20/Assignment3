@@ -1,117 +1,61 @@
-# ECSE 541 - Assignment 3: Computer System Design in SystemC
+# ECSE 541 - Assignment 3: Matrix Multiplication Co-Design
 
-**Title:** HW/SW Co-Design of Matrix Multiplication using SystemC with Custom Bus
+A cycle-accurate SystemC model of a heterogeneous system performing matrix multiplication with an optional hardware coprocessor for accelerating the innermost k-loop.
 
-**Group Members:**
-- Abhishree (Software Component + Command-line Parsing)
-- Lucero (Memory Component + Golden Model Support)
-- Jacob (Hardware Coprocessor)
-- Maninder (Bus Specialist)
+## Makefile Setup
 
-## 1. Project Overview
+Create a `Makefile` in the root of the project with the following basic configuration. Ensure you set the correct path to your SystemC installation (`SYSTEMC_HOME`):
+CXX = g++
 
-This project implements a cycle-accurate SystemC model of a heterogeneous system that performs matrix multiplication with optional hardware acceleration of the innermost k-loop.
+CXXFLAGS = -std=gnu++17 -Wall -g \
+           -I<SYSTEMC_HOME>/include \
+           -I./shared \
+           -I./sw \
+           -I./mem \
+           -I./hw \
+           -I.bus \
+           -I./golden
 
-### Key Features
-- 150 MHz clock domain
-- Custom TLM-style bus with round-robin arbitration between SW and HW masters
-- Memory-mapped I/O (MMIO) region for HW control
-- Hardware coprocessor that offloads the k-loop
-- Pure software fallback mode
-- Cycle-accurate performance modeling
-- Golden C reference model for verification
-- Support for both small and large test cases
+LDFLAGS = -L<SYSTEMC_HOME>/lib \
+          -Wl,-rpath,<SYSTEMC_HOME>/lib \
+          -lsystemc -lm
 
-## 2. System Architecture
+# ── Targets ───────────────────────────────────────────────────
+.PHONY: all sim golden clean
 
-- **Software Component**: Handles outer loops (n, i, j), initializes matrices, triggers HW via MMIO, and collects results.
-- **Hardware Coprocessor**: Accelerates the innermost k-loop using bus master transactions.
-- **Memory Module**: Single shared memory with validation and MMIO protection.
-- **Bus Module**: Central interconnect with round-robin arbitration, single and burst support, and accurate cycle delays.
-- **Golden Model**: Pure C implementation for functional verification.
+all: sim golden
 
-## 3. File Structure
-ecse541_a3/
-├── main.cpp                 # Top-level sc_main and module binding
-├── Makefile
-├── README.md
-├── test_2x2.mem             # Small 2x2 test case
-├── mem_init.txt             # Large test data (optional)
-├── golden_model.c           # Golden reference
-├── mm                       # Main SystemC executable
-├── golden_mm                # Golden model executable
-├── bus/
-│   ├── bus.h
-│   └── bus.cpp              
-├── sw/
-│   ├── sw.h
-│   ├── sw.cpp
-│   └── cmd_args.h
-├── hw/
-│   ├── hw.h
-│   └── hw.cpp
-├── mem/
-│   ├── memory.h
-│   └── memory.cpp
-└── shared/
-├── common.h             # Constants, MMIO map, helpers
-└── bus_if.h             # Master and Minion interfaces
+# SystemC simulation
+sim: main.cpp sw/sw.cpp hw/hw.cpp bus/bus.cpp mem/memory.cpp
+	$(CXX) $(CXXFLAGS) -o mm $^ $(LDFLAGS)
 
-## 4. How to Build
+# Pure-C golden model
+golden: golden_model.c
+	gcc -O0 -I./shared -o golden_mm golden_model.c
 
+clean:
+	rm -f mm golden_mm *.o
+
+
+## Build Instructions
+
+Compile the SystemC simulation and the Golden C model using:
 ```bash
-make clean
-make
+make 
+```
 
-This builds:
+## Running the Application
 
-./mm           // Full SystemC simulation (HW/SW or pure SW)
-./golden_mm    // Golden C reference model
+**Usage (`./mm <memoryInitFile> [[[addrC addrA addrB] size] loops]`):**
+**Note: addresses must be larger than 0x400**
+```bash
+# Run HW/SW Co-design mode (Small 2x2 test case)
+./mm test_large.mem [[[addrC addrA addrB] size] loops]
 
-## 5. How to Run
+# Run SW for comparison
+# Change bool hw_mode = false; in sw/cmd_args.h and make
+./mm test_large.mem [[[addrC addrA addrB] size] loops]
 
-# Small test case
-
-# HW/SW Co-design mode
-./mm test_2x2.mem 0x400 0x410 0x420 2 1
-
-# Pure Software mode
-./mm test_2x2.mem 0x400 0x410 0x420 2 0
-
-# Large Test case
-./mm mem_init.txt 0x400 0x024400 0x048400 6 1
-
-# Golden Model Verification
-./golden_mm test_2x2.mem 0x400 0x410 0x420 2 1
-
-## 6. Command Line Format
-- Bash./mm <memory_file> <addrC> <addrA> <addrB> <size> <hw_enabled>
-- Parameters:
-    - memory_file : Path to memory initialization file
-    - addrC, addrA, addrB : Base addresses (in bytes) for matrices C, A, B
-    - size : Matrix dimension N (default 6)
-    - hw_enabled : 1 = enable HW acceleration, 0 = pure software
-
-## 7. Expected Output
-
-=== ECSE 541 A3 – Matrix Multiplication ===
-  mode : HW/SW
-[sim] Starting simulation...
-[HW] HW component started
-[SW] Starting. HW enabled: yes
-[BUS] Master 0 requested @0x400 len=1
-[BUS] Granted to master 0
-[MEMORY] Received WRITE request @0x400 len=1
-[BUS] Acknowledge sent
-... (multiple bus transactions)
-[HW] START command received - starting k-loop
-[HW] k-loop finished, result written to 0x...
-[sim] Simulation complete.
-
-## 8. Performance Comparison
-**After successful run, record:**
-
-- Pure SW execution time (cycles)
-- HW/SW co-design execution time (cycles)
-- Speedup factor
-- Bus utilization breakdown
+# To condense output add at the end of the prompt:
+ 2>/dev/null | grep -E "k-loop finished|SW|Done"
+```
